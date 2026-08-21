@@ -95,15 +95,19 @@ def build(
             base = git("merge-base", cand, name, cwd=cwd)
             if not base:
                 continue
-            # Rank by shared patches first (survives a rebase of either side),
-            # then by fewest commits since the shared point, then by the
-            # candidate nearest the trunk. Negated so "more shared" sorts first.
-            key = (
-                -shared_patches(cand, name, cwd),
-                count(f"{base}..{name}", cwd),
-                distance[cand],
-                cand,
-            )
+            # Rank by shared patches first (survives a rebase of either
+            # side), then by fewest commits since the shared point, then by
+            # the candidate nearest the trunk. Negated so "more" sorts first.
+            #
+            # Only a MAJORITY overlap counts. A branch sharing one incidental
+            # commit is not a parent, and counting raw overlap lets such a
+            # branch outrank the trunk even when it is hundreds of commits
+            # further away.
+            gap = count(f"{base}..{name}", cwd)
+            shared = shared_patches(cand, name, cwd)
+            ahead = count(f"{cand}..{name}", cwd)
+            dominant = shared if ahead and shared * 2 > ahead else 0
+            key = (-dominant, gap, distance[cand], cand)
             if best is None or key < best:
                 best = key
         parent = best[3] if best else trunk
