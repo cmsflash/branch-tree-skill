@@ -51,6 +51,8 @@ class Branch:
     ahead: int = 0
     behind: int = 0
     children: list[str] = field(default_factory=list)
+    # Other branches whose tip tree is byte-identical to this one's.
+    same_tree: list[str] = field(default_factory=list)
 
 
 def worktree_map(cwd: str | None) -> dict[str, str]:
@@ -115,6 +117,19 @@ def build(
         branches[name].ahead = count(f"{parent}..{name}", cwd)
         branches[name].behind = count(f"{name}..{parent}", cwd)
 
+    # Identical content under different commits: amending a message (appending
+    # "(#1234)" on merge) changes the patch-id, so `git cherry` reports the two
+    # as unrelated. Comparing the tip tree catches what patch-ids miss.
+    by_tree: dict[str, list[str]] = defaultdict(list)
+    for name in branches:
+        tree = git("rev-parse", f"{name}^{{tree}}", cwd=cwd)
+        if tree:
+            by_tree[tree].append(name)
+    for peers in by_tree.values():
+        if len(peers) > 1:
+            for name in peers:
+                branches[name].same_tree = sorted(p for p in peers if p != name)
+
     for name, br in branches.items():
         if br.parent and br.parent in branches:
             branches[br.parent].children.append(name)
@@ -126,10 +141,15 @@ def build(
 def prune(
     branches: dict[str, Branch], trunk: str, keep: set[str]
 ) -> dict[str, Branch]:
-    """Keep matched branches plus every ancestor needed to reach the trunk.
+    """Keep matched branches, their ancestors up to the trunk, and everything
+    descending from them.
 
     Ancestors are retained rather than reparenting matched branches onto the
     trunk, so each branch keeps the parent its +A/-B was measured against.
+    Descendants are retained because work stacked on a branch is part of that
+    branch's situation: asking about one branch and being shown it in isolation
+    hides both the children that would break if it moved and any sibling that
+    supersedes it.
     """
     needed: set[str] = {trunk}
     for name in keep:
@@ -137,6 +157,27 @@ def prune(
         while cursor and cursor in branches:
             needed.add(cursor)
             cursor = branches[cursor].parent
+
+    def descend(name: str) -> None:
+        for child in branches[name].children:
+            if child not in needed:
+                needed.add(child)
+            descend(child)
+
+    # A branch flagged as same-tree is named in the output, so it must appear
+    # in the tree too -- naming a duplicate the reader cannot see is worse than
+    # not flagging it. Pull in those peers, and their stacks with them.
+    for name in list(keep):
+        if name in branches:
+            keep = keep | set(branches[name].same_tree)
+
+    for name in list(keep):
+        if name in branches:
+            cursor: str | None = name
+            while cursor and cursor in branches:
+                needed.add(cursor)
+                cursor = branches[cursor].parent
+            descend(name)
     kept = {n: b for n, b in branches.items() if n in needed}
     for br in kept.values():
         br.children = [c for c in br.children if c in kept]
@@ -150,8 +191,9 @@ def render(branches: dict[str, Branch], trunk: str) -> list[str]:
         for child in branches[name].children:
             br = branches[child]
             label = f"{child}, {br.worktree}" if br.worktree else child
+            flag = f"  [same tree as {', '.join(br.same_tree)}]" if br.same_tree else ""
             lines.append(f"{prefix}│")
-            lines.append(f"{prefix}└── {label} (+{br.ahead}/-{br.behind})")
+            lines.append(f"{prefix}└── {label} (+{br.ahead}/-{br.behind}){flag}")
             emit(child, prefix + "│   ")
 
     emit(trunk, "")

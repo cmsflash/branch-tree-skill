@@ -39,9 +39,17 @@ python3 scripts/branch_tree.py --trunk develop     # non-standard trunk
 
 The filter is a regex matched against branch names. Parents are always inferred
 over *every* branch and the tree is pruned afterwards, so a filtered view shows
-the same parent and the same `(+A/-B)` as the full one — ancestors are kept even
-when they do not match the filter. Trunk is detected from `origin/HEAD`, falling
-back to `main`, `master`, then `trunk`.
+the same parent and the same `(+A/-B)` as the full one. A filtered view keeps:
+
+- **ancestors** up to the trunk, so each branch keeps the parent its `+A/-B` was
+  measured against;
+- **descendants**, because work stacked on a branch is part of that branch's
+  situation — those are the branches that break if it moves;
+- **same-tree peers** and their stacks, so a flagged duplicate is visible rather
+  than merely named.
+
+Trunk is detected from `origin/HEAD`, falling back to `main`, `master`, then
+`trunk`.
 
 ## Why parent inference needs patch-ids
 
@@ -81,11 +89,17 @@ main
 **A branch may be a patch-identical duplicate of its sibling.** `git cherry`
 compares patch-ids, and amending a commit message — say appending `(#2870)` on
 merge — changes the patch-id while the content stays the same. Two branches then
-look independent when one supersedes the other. Confirm with a content diff:
+look independent when one supersedes the other.
 
-```bash
-git diff <branch-a> <branch-b>   # empty = identical trees, one is redundant
+The report flags this for you by comparing tip trees:
+
+```text
+└── fable5-only (+1/-0)  [same tree as sbv-run-tip]
 ```
+
+Identical trees mean the two branches produce the same working tree, so one is
+redundant. Prefer whichever is on a worktree or has a PR; verify with
+`git diff <branch-a> <branch-b>` (empty output confirms it).
 
 **A branch's upstream may no longer exist.** `git for-each-ref` still prints a
 tracking ref after it is deleted server-side; `git rev-parse origin/<name>`
