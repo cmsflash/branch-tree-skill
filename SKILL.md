@@ -37,9 +37,11 @@ python3 scripts/branch_tree.py -C ~/Programs/core  # a different repo
 python3 scripts/branch_tree.py --trunk develop     # non-standard trunk
 ```
 
-The filter is a regex matched against branch names; the trunk is always kept so
-the tree still has a root. Trunk is detected from `origin/HEAD`, falling back to
-`main`, `master`, then `trunk`.
+The filter is a regex matched against branch names. Parents are always inferred
+over *every* branch and the tree is pruned afterwards, so a filtered view shows
+the same parent and the same `(+A/-B)` as the full one — ancestors are kept even
+when they do not match the filter. Trunk is detected from `origin/HEAD`, falling
+back to `main`, `master`, then `trunk`.
 
 ## Why parent inference needs patch-ids
 
@@ -74,6 +76,22 @@ main
 │   └── feat/gcs-explorer-sort-filter (+19/-59)
 ```
 
+## Two traps when reading the output
+
+**A branch may be a patch-identical duplicate of its sibling.** `git cherry`
+compares patch-ids, and amending a commit message — say appending `(#2870)` on
+merge — changes the patch-id while the content stays the same. Two branches then
+look independent when one supersedes the other. Confirm with a content diff:
+
+```bash
+git diff <branch-a> <branch-b>   # empty = identical trees, one is redundant
+```
+
+**A branch's upstream may no longer exist.** `git for-each-ref` still prints a
+tracking ref after it is deleted server-side; `git rev-parse origin/<name>`
+fails. Do not infer merged-ness from a tracking branch without checking it
+resolves.
+
 ## Reading the numbers before acting
 
 - **`+N/-0`** — a clean stack. Safe to merge in order.
@@ -92,6 +110,11 @@ git diff origin/main <branch> --stat   # empty output = fully merged, safe to de
 
 `git merge-base --is-ancestor` reports "not merged" for squash-merged branches
 and will talk you out of deleting something that is genuinely gone.
+
+This check is only meaningful when the branch is near the trunk. On a branch
+hundreds of commits behind, the diff is dominated by trunk drift — thousands of
+files that say nothing about the branch's own commits. Rebase first, or compare
+against the merge-base instead.
 
 ## Reporting to a human
 

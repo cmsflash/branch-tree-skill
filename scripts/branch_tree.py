@@ -123,6 +123,26 @@ def build(
     return branches
 
 
+def prune(
+    branches: dict[str, Branch], trunk: str, keep: set[str]
+) -> dict[str, Branch]:
+    """Keep matched branches plus every ancestor needed to reach the trunk.
+
+    Ancestors are retained rather than reparenting matched branches onto the
+    trunk, so each branch keeps the parent its +A/-B was measured against.
+    """
+    needed: set[str] = {trunk}
+    for name in keep:
+        cursor: str | None = name
+        while cursor and cursor in branches:
+            needed.add(cursor)
+            cursor = branches[cursor].parent
+    kept = {n: b for n, b in branches.items() if n in needed}
+    for br in kept.values():
+        br.children = [c for c in br.children if c in kept]
+    return kept
+
+
 def render(branches: dict[str, Branch], trunk: str) -> list[str]:
     lines = [trunk]
 
@@ -150,19 +170,25 @@ def main() -> int:
 
     trunk = args.trunk or detect_trunk(args.cwd)
     names = git("for-each-ref", "--format=%(refname:short)", "refs/heads/", cwd=args.cwd).splitlines()
-    if args.filter:
-        pattern = re.compile(args.filter)
-        matched = [n for n in names if pattern.search(n)]
-        if not matched:
-            print(f"No branches match /{args.filter}/.", file=sys.stderr)
-            return 1
-        # Keep the trunk so the tree still has a root, even if it did not match.
-        names = matched if trunk in matched else [*matched, trunk]
     if not names:
         print("No branches found.", file=sys.stderr)
         return 1
 
+    keep: set[str] | None = None
+    if args.filter:
+        pattern = re.compile(args.filter)
+        matched = {n for n in names if pattern.search(n)}
+        if not matched:
+            print(f"No branches match /{args.filter}/.", file=sys.stderr)
+            return 1
+        keep = matched
+
+    # Parents are always inferred over EVERY branch, then the tree is pruned.
+    # Inferring over the filtered set instead would let a filter change who
+    # counts as a parent, silently changing the +A/-B a branch reports.
     branches = build(names, trunk, args.cwd)
+    if keep is not None:
+        branches = prune(branches, trunk, keep)
     print("\n".join(render(branches, trunk)))
     return 0
 
